@@ -1,0 +1,142 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+---
+AWSTemplateFormatVersion: "2010-09-09"
+Description : >
+  AWS Blog:How to grant least privilege access to third parties on your private
+  EC2 instances with AWS Systems Manager
+
+  Sample CloudFormation - Creating the IAM Role in the main account hosting
+  the private EC2 to allow cross accounts from ThirdParty accounts".
+  CAUTION: Should only be executed after the creation of the role in third-party
+  using for example : 2-BlogPost_Prerequisites_ThirdParty_RoleCreation.yaml
+
+Parameters:
+  ParamThirdPartyAccountID:
+    Description: "The Account ID of your third-party"
+    Type: String
+    Default: "123456789012"
+    AllowedPattern: ^[0-9]{12}$
+  Param3PRoleName:
+    Description: "The IAM role name of your third-party allows to assume role in your account"
+    Type: String
+    Default: "3P_IAM_Assume_Role"
+  ParamExternalId:
+    Description: "ExternalID to configure"
+    Type: String
+    Default: "ExternalID3rdPartyA"
+  ParamTagKeySet:
+    Description: "Tag to configure"
+    Type: String
+    Default: "ExternalAccessGrantedTo"
+  ParamTagValueSet:
+    Description: "Tag value to configure on EC2"
+    Type: String
+    Default: "Third_Party_A"
+  ParamRoleName:
+    Description: "Role name in EC2 Accounts to be assumed by ThirdPartyA"
+    Type: String
+    Default: "SSMStartSession_IAM_Role_ThirdPartyA"
+  ParamRunAsUser:
+    Description: "The name of Operating System user you have created"
+    Type: String
+    Default: "os_user_a_alice"
+  ParamSessionMgrLogGroupName:
+    Type : String
+    Default: "SSMSessionManager_LogGroup"
+    Description: "Cloudwatch Logs Group for Session Manager logs"
+
+Resources:
+  RssSSMStartSessionPolicyForThirdPartyA:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Sid: "TerminateResumeSession"
+            Effect: "Allow"
+            Action:
+              - ssm:TerminateSession
+              - ssm:ResumeSession
+            Resource: "*"
+            Condition:
+              StringEquals:
+                ssm:resourceTag/aws:ssmmessages:session-id: ["${aws:userid}"]
+          -
+            Sid : "CloudWatchLogGroup"
+            Effect : "Allow"
+            Action :
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+              - logs:DescribeLogGroups
+              - logs:DescribeLogStreams
+            Resource : !Sub "arn:${AWS::Partition}:logs:${AWS::Region}::${AWS::AccountId}::log-group:${ParamSessionMgrLogGroupName}:*"
+          -
+            Sid: "AllowUsageOfSSMDocument"
+            Effect: "Allow"
+            Action: "ssm:StartSession"
+            Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:document/SSM-SessionManagerRunShell"
+          -
+            Sid : "GenericSSM"
+            Effect: "Allow"
+            Action:
+              - ec2:DescribeInstances
+              - ssm:GetConnectionStatus
+              - ssm:DescribeInstanceProperties
+            Resource : "*"
+          -
+            Sid: "StartSessionOnInstances"
+            Effect: "Allow"
+            Action:
+              - ssm:StartSession
+            Resource: !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/*"
+            Condition:
+              StringEquals:
+                ssm:resourceTag/ExternalAccessGrantedTo: !Ref ParamTagValueSet
+          -
+            Sid : "ForbidAssumingAnotherRoleAndSession"
+            Effect: "Deny"
+            Action:
+              - sts:AssumeRole
+              - ssm:DescribeSessions ############# Will reveal too much info
+            Resource : "*"
+
+#Creation of IAM role in the EC2 Account hosting the EC2 that
+# will be assume by third-parties using cross-account
+  RssRootRole:
+      Type: "AWS::IAM::Role"
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Principal:
+                AWS:
+                  - !Sub arn:${AWS::Partition}:iam::${ParamThirdPartyAccountID}:role/${Param3PRoleName}
+              Action:
+                - "sts:AssumeRole"
+              Condition:
+                StringEquals:
+                  sts:ExternalId: !Ref ParamExternalId
+        Path: /
+        ManagedPolicyArns:
+          - !Ref RssSSMStartSessionPolicyForThirdPartyA
+        RoleName: !Ref ParamRoleName
+        Description: "Role to provide access to the third party to the local private EC2"
+        Tags:
+        - Key: SSMSessionRunAs
+          Value: !Ref ParamRunAsUser
+        - Key: !Ref ParamTagKeySet
+          Value: !Ref ParamTagValueSet
+        - Key: Type
+          Value: "IAM Role"
+        - Key: Role
+          Value: "Role to be assume by AnyCompany A - Third-party"
+        - Key: Account
+          Value: "Your Account hosting your private EC2"
+Outputs:
+  OutStackName:
+    Description: "Stack name."
+    Value: !Sub "${AWS::StackName}"

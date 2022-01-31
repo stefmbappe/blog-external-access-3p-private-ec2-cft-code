@@ -1,0 +1,121 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+---
+AWSTemplateFormatVersion: "2010-09-09"
+Description : >
+  AWS Blog:How to grant least privilege access to third parties on your private
+  EC2 instances with AWS Systems Manager
+
+  Sample CloudFormation - Configuration in the Third_Party_A account.
+  Create an IAM role, a User Group. Create permissions on the User Group
+  to allow switch role to the IAM role created.
+  Then create the permissions on the IAM role to assume role cross-account
+  into the Main Account hosting the EC2 using External ID.
+
+Parameters:
+  ParamAccountIDwithEC2:
+    Description: "Your Account ID hosting the private EC2"
+    Type: String
+    Default: "123456789012"
+    AllowedPattern: ^[0-9]{12}$
+  CrossAccountRole:
+    Description: "The IAM role created for cross-account in your Account ID hosting the EC2"
+    Type: String
+    Default: "SSMStartSession_IAM_Role_ThirdPartyA"
+  ParamExternalId:
+    Description: "ExternalID - confidential and only known between you and your Third_Party_A"
+    Type: String
+    Default: "ExternalID3rdPartyA"
+  ParamUsernameToSet:
+    Description: "Username to give to the new user"
+    Type: String
+    Default: "alice"
+  Param3PRoleName:
+    Description: "Local Role:The IAM role name of your third-party allows to assume role in your account"
+    Type: String
+    Default: "3P_Swith_IAM_Role"
+  ParamAssumeRole:
+    Description: "The IAM role name of assume role for cross account"
+    Type: String
+    Default: "3P_IAM_Assume_Role"
+
+Resources:
+
+#Create a User Group for "$ParamUsernameToSet" Group, where the permissions to use R1 one will be attached
+  RssNewGroupByCF:
+    Type: AWS::IAM::Group
+    Properties:
+      ManagedPolicyArns:
+        - !Ref RssIAMPolicyXAccount2MainACC
+
+#Add one of your user to the Group
+  RssAddUserToGroup:
+    Type: AWS::IAM::UserToGroupAddition
+    Properties:
+      GroupName: !Ref RssNewGroupByCF
+      Users:
+        - !Ref ParamUsernameToSet
+
+#Assume role into local account
+  RssIAMPolicyXAccount2MainACC:
+      Type: AWS::IAM::ManagedPolicy
+      Properties:
+        PolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+          -
+            Effect: Allow
+            Action:
+              - sts:AssumeRole
+            Resource:
+              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Param3PRoleName}
+ #Assume role for cross account
+  Rss3PManagedPolicy:
+      Type: AWS::IAM::ManagedPolicy
+      Properties:
+        PolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+            -
+              Sid: "AssumeRoleAllowForCrossAccount"
+              Effect: "Allow"
+              Action:
+                - sts:AssumeRole
+              Resource: !Sub arn:${AWS::Partition}:iam::${ParamAccountIDwithEC2}:role/${CrossAccountRole}
+              Condition:
+                StringEquals:
+                  sts:ExternalId: !Ref ParamExternalId
+
+#Create IAM Role : (1) authorizing $ParamUsernameToSet to assume the role
+#(2) assuming role with ExternalID in EC2 Accounts
+  Rss3PIAMRoleAssumeRoleLocally:
+      Type: AWS::IAM::Role
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+            - Sid: AllowAssumeRoleInCustomerAccount
+              Effect: Allow
+              Principal:
+                AWS:
+                  - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:user/${ParamUsernameToSet}
+              Action:
+                - sts:AssumeRole
+        Path: /
+        ManagedPolicyArns:
+          - !Ref Rss3PManagedPolicy
+        RoleName: !Ref ParamAssumeRole
+        Description: "Local assume role : 1rst jump - Allow 3P user to switch role locally"
+        Tags:
+        - Key: Type
+          Value: "IAM Role"
+        - Key: Role
+          Value: "Role to be assume by Third_Party_A user locally"
+        - Key: Account
+          Value: "3P Account - Third_Party_A"
+
+Outputs:
+  OutStackName:
+    Description: "Stack name."
+    Value: !Sub "${AWS::StackName}"
